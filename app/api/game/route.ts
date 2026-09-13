@@ -81,7 +81,7 @@ async function endTurn(room:RoomRow, players:PlayerRow[], settings:Settings, sco
   await saveGame(room, scores, game);
 }
 
-export async function GET(request:Request) {
+async function handleGet(request:Request) {
   await ensureSchema();
   const url = new URL(request.url);
   const code = (url.searchParams.get('code') ?? '').trim().toUpperCase();
@@ -92,7 +92,7 @@ export async function GET(request:Request) {
   return json(view(room, players, viewerToken));
 }
 
-export async function POST(request:Request) {
+async function handlePost(request:Request) {
   await ensureSchema();
   const body = await request.json() as Record<string, unknown>;
   const action = String(body.action ?? '');
@@ -188,3 +188,25 @@ export async function POST(request:Request) {
   players = await loadPlayers(room.id);
   return json(view(refreshed!, players, viewerToken));
 }
+
+const allowedOrigins = new Set([
+  'https://tabu.alperensenel.com',
+  'https://saltatrix-hub.github.io',
+  'http://localhost:4173',
+]);
+
+function withCors(response:Response, request:Request) {
+  const origin = request.headers.get('Origin');
+  const headers = new Headers(response.headers);
+  if (origin && allowedOrigins.has(origin)) {
+    headers.set('Access-Control-Allow-Origin', origin);
+    headers.set('Vary', 'Origin');
+  }
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  headers.set('Access-Control-Allow-Headers', 'Content-Type');
+  return new Response(response.body, { status:response.status, statusText:response.statusText, headers });
+}
+
+export async function GET(request:Request) { return withCors(await handleGet(request), request); }
+export async function POST(request:Request) { return withCors(await handlePost(request), request); }
+export function OPTIONS(request:Request) { return withCors(new Response(null, { status:204 }), request); }
