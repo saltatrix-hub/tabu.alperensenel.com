@@ -31,12 +31,16 @@ export default function Home() {
   const [room, setRoom] = useState<Room | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const mutationVersion = useRef(0);
 
   const fetchRoom = useCallback(async (code = roomCode, auth = token) => {
-    if (!code || !auth) return;
+    if (!code || !auth || busyRef.current) return;
+    const version = mutationVersion.current;
     const response = await fetch(`${API_ORIGIN}/api/game?code=${encodeURIComponent(code)}&token=${encodeURIComponent(auth)}`, { cache:'no-store' });
     if (!response.ok) return;
-    setRoom(await response.json());
+    const freshRoom = await response.json();
+    if (version === mutationVersion.current && !busyRef.current) setRoom(freshRoom);
   }, [roomCode, token]);
 
   useEffect(() => {
@@ -61,10 +65,10 @@ export default function Home() {
   };
 
   const act = async (action:string, extra:Record<string, unknown> = {}) => {
-    setBusy(true); setError('');
+    busyRef.current = true; mutationVersion.current += 1; setBusy(true); setError('');
     try { const data = await api({ action, code:roomCode, token, ...extra }); if (data.status) setRoom(data); }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'Bir şeyler ters gitti.'); }
-    finally { setBusy(false); }
+    finally { busyRef.current = false; setBusy(false); }
   };
 
   const leave = () => { localStorage.removeItem('tabu-session'); setRoom(null); setRoomCode(''); setToken(''); setScreen('home'); };
@@ -73,7 +77,7 @@ export default function Home() {
     <main className="app-shell">
       <nav className="topbar">
         <button className="brand" onClick={leave} aria-label="Ana sayfa"><span className="brand-mark">T</span><span>TABU!</span></button>
-        {screen === 'room' && room ? <span className="room-chip">ODA <b>{room.code}</b></span> : <span className="status-pill"><i /> Canlı oyun</span>}
+        {screen === 'room' && room ? <span className="room-chip">ODA <b>{room.code}</b></span> : <span className="status-pill"><i /> Ortam kızışıyor</span>}
       </nav>
       {error && <div className="toast" role="alert">{error}<button onClick={() => setError('')}>×</button></div>}
       {screen === 'home' && <HomeScreen roomCode={roomCode} setRoomCode={setRoomCode} onCreate={() => setScreen('create')} onJoin={() => setScreen('join')} />}
@@ -90,17 +94,17 @@ export default function Home() {
 function HomeScreen({ roomCode, setRoomCode, onCreate, onJoin }:{ roomCode:string; setRoomCode:(v:string)=>void; onCreate:()=>void; onJoin:()=>void }) {
   return <>
     <section className="hero">
-      <div className="eyebrow">Arkadaşlarını topla, kelimeleri konuştur</div>
-      <h1>Yasaklı kelimelere<br /><em>yakalanma.</em></h1>
-      <p>Takımını kur, odanı paylaş ve kahkaha dolu mücadeleyi başlat.</p>
+      <div className="eyebrow">🤫 Sessizlik yasak, kahkaha serbest</div>
+      <h1>Dilinin ucunda…<br /><em>söylemesi yasak!</em></h1>
+      <p>Takımını kap, kelimeleri kıvır ve arkadaşlarını “onu da mı söyleyemiyorum?” diye çıldırt.</p>
       <div className="action-grid">
-        <button className="create-card" type="button" onClick={onCreate}><span className="action-icon">＋</span><span><strong>Oyun Kur</strong><small>Ayarları seç ve odanı oluştur</small></span><b>→</b></button>
+        <button className="create-card" type="button" onClick={onCreate}><span className="action-icon">🎲</span><span><strong>Masayı Kur</strong><small>Kuralları seç, curcunayı başlat</small></span><b>→</b></button>
         <form className="join-card" onSubmit={(e) => { e.preventDefault(); if (roomCode.length >= 5) onJoin(); }}>
           <label htmlFor="room-code">Oda kodun var mı?</label><div><input id="room-code" value={roomCode} onChange={(e) => setRoomCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,6))} placeholder="ÖRN. 8K4P2X" autoComplete="off" /><button type="submit" disabled={roomCode.length < 5}>Katıl</button></div>
         </form>
       </div>
     </section>
-    <footer><span>⚡ Anlık skor</span><span>◉ Canlı takip</span><span>♟ Esnek takımlar</span></footer>
+    <footer><span>⚡ Jet hızında skor</span><span>👀 Rakip gözetleme</span><span>🕺 Eşitlik şart değil</span></footer>
   </>;
 }
 
@@ -136,14 +140,15 @@ function TeamBox({ team, players, me, onSwitch }:{ team:Team; players:Player[]; 
 }
 
 function Game({ room, busy, act }:{ room:Room; busy:boolean; act:(a:string,e?:Record<string,unknown>)=>void }) {
-  const game=room.game!; const [now,setNow]=useState(game.endsAt-room.settings.duration*1000), ended=useRef(false);
+  const game=room.game!; const [now,setNow]=useState(game.endsAt-room.settings.duration*1000), [flash,setFlash]=useState(''), ended=useRef(false);
   useEffect(()=>{const timer=setInterval(()=>setNow(new Date().getTime()),250);return()=>clearInterval(timer);},[]);
   const seconds=Math.max(0,Math.ceil((game.endsAt-now)/1000));
   useEffect(()=>{if(seconds===0&&!ended.current&&(room.me?.id===game.currentPlayerId||room.me?.isHost)){ended.current=true;act('end_turn');}if(seconds>0)ended.current=false;},[seconds,room.me,game.currentPlayerId,act]);
   const narrator=room.me?.id===game.currentPlayerId, opponent=room.me?.team!==game.activeTeam;
-  return <section className="game-stage"><header className="scorebar"><div className="score team-a"><span>TAKIM A</span><b>{room.scores.A}</b></div><div className={`timer ${seconds<=10?'danger':''}`}><small>KALAN SÜRE</small><b>{seconds}</b></div><div className="score team-b"><b>{room.scores.B}</b><span>TAKIM B</span></div></header><div className="turn-info"><span className={`team-dot team-${game.activeTeam.toLowerCase()}`}/><strong>{game.currentPlayerName}</strong> anlatıyor <small>Hedef: {room.settings.targetScore}</small></div>
+  const trigger=(action:string,label:string)=>{setFlash(label);window.setTimeout(()=>setFlash(''),520);act(action);};
+  return <section className="game-stage">{flash&&<div className="action-flash">{flash}</div>}<header className="scorebar"><div className="score team-a"><span>TAKIM A</span><b>{room.scores.A}</b></div><div className={`timer ${seconds<=10?'danger':''}`}><small>KALAN SÜRE</small><b>{seconds}</b></div><div className="score team-b"><b>{room.scores.B}</b><span>TAKIM B</span></div></header><div className="turn-info"><span className={`team-dot team-${game.activeTeam.toLowerCase()}`}/><strong>{game.currentPlayerName}</strong> mikrofonu kaptı 🎤 <small>Hedef: {room.settings.targetScore}</small></div>
     {game.card?<div className="word-card"><span className="category">{game.card.category}</span><h2>{game.card.word}</h2><div className="forbidden-title">SÖYLEME!</div><ul>{game.card.forbidden.map(word=><li key={word}>{word}</li>)}</ul></div>:<div className="hidden-card"><div className="lock">✦</div><h2>Kelime gizli</h2><p>{game.currentPlayerName} anlatıyor. Takımınla birlikte kelimeyi bul!</p></div>}
-    <div className="game-controls">{narrator&&<><button className="pass" disabled={busy||game.passesLeft<1} onClick={()=>act('pass')}>Pas <small>{game.passesLeft}</small></button><button className="correct" disabled={busy} onClick={()=>act('correct')}>✓ Doğru</button><button className="end" disabled={busy} onClick={()=>act('end_turn')}>Turu Bitir</button></>}{opponent&&<button className="taboo" disabled={busy} onClick={()=>act('taboo')}>✕ TABU!</button>}{!narrator&&!opponent&&<span className="guess-note">Cevabı takımınla sesli tahmin et!</span>}</div>
+    <div className="game-controls">{narrator&&<><button className="pass" disabled={busy||game.passesLeft<1} onClick={()=>trigger('pass','🏃 PAS!')}>Pas <small>{game.passesLeft}</small></button><button className="correct" disabled={busy} onClick={()=>trigger('correct','🎉 ŞAK DİYE!')}>✓ Doğru</button><button className="end" disabled={busy} onClick={()=>trigger('end_turn','⏰ TUR BİTTİ!')}>Turu Bitir</button></>}{opponent&&<button className="taboo" disabled={busy} onClick={()=>trigger('taboo','🚨 YAKALANDIN!')}>✕ TABU!</button>}{!narrator&&!opponent&&<span className="guess-note">Bağırmak serbest, yasaklı kelimeyi söylemek değil! 📣</span>}</div>
   </section>;
 }
 

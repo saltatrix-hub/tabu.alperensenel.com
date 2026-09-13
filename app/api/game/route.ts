@@ -15,18 +15,6 @@ const id = () => crypto.randomUUID();
 const token = () => `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll('-', '');
 const roomCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (n) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[n % 32]).join('');
 
-async function ensureSchema() {
-  const db = env.DB;
-  await db.batch([
-    db.prepare(`CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY NOT NULL, code TEXT NOT NULL, host_token TEXT NOT NULL, status TEXT DEFAULT 'lobby' NOT NULL, settings TEXT NOT NULL, scores TEXT DEFAULT '{"A":0,"B":0}' NOT NULL, game_state TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`),
-    db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_code ON rooms (code)'),
-    db.prepare('CREATE TABLE IF NOT EXISTS players (id TEXT PRIMARY KEY NOT NULL, room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE, name TEXT NOT NULL, team TEXT NOT NULL, seat INTEGER NOT NULL, token TEXT NOT NULL, joined_at INTEGER NOT NULL)'),
-    db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_players_token ON players (token)'),
-    db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_players_room_name ON players (room_id, name)'),
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_players_room_team ON players (room_id, team, seat)'),
-  ]);
-}
-
 async function loadRoom(code:string) {
   return env.DB.prepare('SELECT * FROM rooms WHERE code = ?').bind(code).first<RoomRow>();
 }
@@ -82,7 +70,6 @@ async function endTurn(room:RoomRow, players:PlayerRow[], settings:Settings, sco
 }
 
 async function handleGet(request:Request) {
-  await ensureSchema();
   const url = new URL(request.url);
   const code = (url.searchParams.get('code') ?? '').trim().toUpperCase();
   const viewerToken = url.searchParams.get('token') ?? '';
@@ -93,7 +80,6 @@ async function handleGet(request:Request) {
 }
 
 async function handlePost(request:Request) {
-  await ensureSchema();
   const body = await request.json() as Record<string, unknown>;
   const action = String(body.action ?? '');
 
