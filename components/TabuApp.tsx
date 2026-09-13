@@ -66,8 +66,23 @@ export default function Home() {
 
   const act = async (action:string, extra:Record<string, unknown> = {}) => {
     busyRef.current = true; mutationVersion.current += 1; setBusy(true); setError('');
+    const snapshot = room;
+    if (room?.game && (action === 'pass' || action === 'correct' || action === 'taboo')) {
+      setRoom({
+        ...room,
+        scores: {
+          ...room.scores,
+          [room.game.activeTeam]: room.scores[room.game.activeTeam]
+            + (action === 'correct' ? 1 : action === 'taboo' ? -1 : 0),
+        },
+        game: {
+          ...room.game,
+          passesLeft: action === 'pass' ? Math.max(0, room.game.passesLeft - 1) : room.game.passesLeft,
+        },
+      });
+    }
     try { const data = await api({ action, code:roomCode, token, ...extra }); if (data.status) setRoom(data); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : 'Bir şeyler ters gitti.'); }
+    catch (caught) { setRoom(snapshot); setError(caught instanceof Error ? caught.message : 'Bir şeyler ters gitti.'); }
     finally { busyRef.current = false; setBusy(false); }
   };
 
