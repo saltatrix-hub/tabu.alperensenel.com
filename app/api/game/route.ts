@@ -124,7 +124,42 @@ async function handlePost(request:Request) {
   const actor = players.find((player) => player.token === viewerToken);
   if (!actor) return fail('Oyuncu oturumu geçersiz.', 401);
 
-  if (action === 'team') {
+  if (action === 'leave') {
+    const remaining = players.filter((player) => player.id !== actor.id);
+    if (!remaining.length) {
+      await env.DB.batch([
+        env.DB.prepare('DELETE FROM players WHERE room_id = ?').bind(room.id),
+        env.DB.prepare('DELETE FROM rooms WHERE id = ?').bind(room.id),
+      ]);
+      return json({ left:true });
+    }
+
+    const nextHostToken = viewerToken === room.host_token ? remaining[0].token : room.host_token;
+    await env.DB.prepare('DELETE FROM players WHERE id = ?').bind(actor.id).run();
+
+    if (room.status === 'playing' && room.game_state) {
+      const game = JSON.parse(room.game_state) as GameState;
+      const hasTeamA = remaining.some((player) => player.team === 'A');
+      const hasTeamB = remaining.some((player) => player.team === 'B');
+      if (!hasTeamA || !hasTeamB) {
+        await env.DB.prepare("UPDATE rooms SET host_token = ?, status = 'lobby', game_state = NULL, updated_at = ? WHERE id = ?")
+          .bind(nextHostToken, Date.now(), room.id).run();
+      } else if (game.currentPlayerId === actor.id) {
+        const settings = JSON.parse(room.settings) as Settings;
+        game.currentPlayerId = remaining.find((player) => player.team === game.activeTeam)!.id;
+        game.endsAt = Date.now() + settings.duration * 1000;
+        await env.DB.prepare('UPDATE rooms SET host_token = ?, game_state = ?, updated_at = ? WHERE id = ?')
+          .bind(nextHostToken, JSON.stringify(game), Date.now(), room.id).run();
+      } else {
+        await env.DB.prepare('UPDATE rooms SET host_token = ?, updated_at = ? WHERE id = ?')
+          .bind(nextHostToken, Date.now(), room.id).run();
+      }
+    } else {
+      await env.DB.prepare('UPDATE rooms SET host_token = ?, updated_at = ? WHERE id = ?')
+        .bind(nextHostToken, Date.now(), room.id).run();
+    }
+    return json({ left:true });
+  } else if (action === 'team') {
     if (room.status !== 'lobby') return fail('Takım yalnızca lobide değiştirilebilir.');
     const team:Team = body.team === 'B' ? 'B' : 'A';
     await env.DB.prepare('UPDATE players SET team = ? WHERE id = ?').bind(team, actor.id).run();

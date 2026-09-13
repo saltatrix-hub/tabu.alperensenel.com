@@ -81,25 +81,29 @@ export default function Home() {
         },
       });
     }
-    try { const data = await api({ action, code:roomCode, token, ...extra }); if (data.status) setRoom(data); }
-    catch (caught) { setRoom(snapshot); setError(caught instanceof Error ? caught.message : 'Bir şeyler ters gitti.'); }
+    try { const data = await api({ action, code:roomCode, token, ...extra }); if (data.status) setRoom(data); return true; }
+    catch (caught) { setRoom(snapshot); setError(caught instanceof Error ? caught.message : 'Bir şeyler ters gitti.'); return false; }
     finally { busyRef.current = false; setBusy(false); }
   };
 
-  const leave = () => { localStorage.removeItem('tabu-session'); setRoom(null); setRoomCode(''); setToken(''); setScreen('home'); };
+  const clearSession = () => { localStorage.removeItem('tabu-session'); setRoom(null); setRoomCode(''); setToken(''); setScreen('home'); };
+  const exitRoom = async () => {
+    if (!window.confirm('Odadan çıkmak istediğine emin misin?')) return;
+    if (await act('leave')) clearSession();
+  };
 
   return (
     <main className="app-shell">
       <nav className="topbar">
-        <button className="brand" onClick={leave} aria-label="Ana sayfa"><span className="brand-mark">T</span><span>TABU!</span></button>
-        {screen === 'room' && room ? <span className="room-chip">ODA <b>{room.code}</b></span> : <span className="status-pill"><i /> Ortam kızışıyor</span>}
+        <button className="brand" onClick={screen === 'room' ? exitRoom : clearSession} aria-label="Ana sayfa"><span className="brand-mark">T</span><span>TABU!</span></button>
+        {screen === 'room' && room ? <div className="room-actions"><span className="room-chip">ODA <b>{room.code}</b></span><button className="exit-room" disabled={busy} onClick={exitRoom}>🚪 Çık</button></div> : <span className="status-pill"><i /> Ortam kızışıyor</span>}
       </nav>
       {error && <div className="toast" role="alert">{error}<button onClick={() => setError('')}>×</button></div>}
       {screen === 'home' && <HomeScreen roomCode={roomCode} setRoomCode={setRoomCode} onCreate={() => setScreen('create')} onJoin={() => setScreen('join')} />}
       {screen === 'create' && <Create onBack={() => setScreen('home')} onDone={enterRoom} setError={setError} setBusy={setBusy} busy={busy} />}
       {screen === 'join' && <Join initialCode={roomCode} onBack={() => setScreen('home')} onDone={enterRoom} setError={setError} setBusy={setBusy} busy={busy} />}
       {screen === 'room' && !room && <Loading />}
-      {screen === 'room' && room?.status === 'lobby' && <Lobby room={room} busy={busy} act={act} leave={leave} />}
+      {screen === 'room' && room?.status === 'lobby' && <Lobby room={room} busy={busy} act={act} leave={exitRoom} />}
       {screen === 'room' && room?.status === 'playing' && <Game room={room} busy={busy} act={act} />}
       {screen === 'room' && room?.status === 'finished' && <Results room={room} busy={busy} act={act} />}
     </main>
@@ -145,9 +149,9 @@ function Join({ initialCode, onBack, onDone, setError, setBusy, busy }:{ initial
   return <section className="panel compact-panel"><button className="back" onClick={onBack}>← Geri</button><div className="panel-heading"><span className="step lime">02</span><div><h2>Odaya katıl</h2><p>Kodunu ve oyunda görünecek adını yaz.</p></div></div><form onSubmit={submit} className="join-form"><label><span>Oda kodu</span><input className="code-input" required minLength={5} maxLength={6} value={code} onChange={e=>setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,6))} /></label><label><span>Adın</span><input required minLength={2} maxLength={24} placeholder="Örn. Ece" value={name} onChange={e=>setName(e.target.value)} /></label><button className="primary" disabled={busy}>{busy?'Katılınıyor…':'Oyuna Katıl →'}</button></form></section>;
 }
 
-function Lobby({ room, busy, act, leave }:{ room:Room; busy:boolean; act:(a:string,e?:Record<string,unknown>)=>void; leave:()=>void }) {
+function Lobby({ room, busy, act, leave }:{ room:Room; busy:boolean; act:(a:string,e?:Record<string,unknown>)=>void; leave:()=>void|Promise<void> }) {
   const copy=()=>navigator.clipboard.writeText(`${location.origin}?room=${room.code}`);
-  return <section className="panel lobby-panel"><div className="lobby-head"><div><span className="mini-label">ODA KODU</span><button className="big-code" onClick={copy}>{room.code} <small>Kopyala</small></button></div><div className="lobby-meta"><span>{room.players.length}/{room.settings.playerLimit} oyuncu</span><span>{room.settings.duration} sn</span><span>{room.settings.passLimit} pas</span><span>{room.settings.category}</span></div></div><div className="waiting"><i/><span>Oyuncular bekleniyor</span></div><div className="teams"><TeamBox team="A" players={room.players} me={room.me} onSwitch={()=>act('team',{team:'A'})}/><div className="versus">VS</div><TeamBox team="B" players={room.players} me={room.me} onSwitch={()=>act('team',{team:'B'})}/></div><div className="lobby-actions">{room.me?.isHost?<button className="primary" disabled={busy||room.players.length<2} onClick={()=>act('start')}>Oyunu Başlat →</button>:<p>Kurucu oyunu başlatınca hazırsın.</p>}<button className="text-button" onClick={leave}>Odadan ayrıl</button></div></section>;
+  return <section className="panel lobby-panel"><div className="lobby-head"><div><span className="mini-label">ODA KODU</span><button className="big-code" onClick={copy}>{room.code} <small>Kopyala</small></button></div><div className="lobby-meta"><span>{room.players.length}/{room.settings.playerLimit} oyuncu</span><span>{room.settings.duration} sn</span><span>{room.settings.passLimit} pas</span><span>{room.settings.category}</span></div></div><div className="waiting"><i/><span>Oyuncular bekleniyor</span></div><div className="teams"><TeamBox team="A" players={room.players} me={room.me} onSwitch={()=>act('team',{team:'A'})}/><div className="versus">VS</div><TeamBox team="B" players={room.players} me={room.me} onSwitch={()=>act('team',{team:'B'})}/></div><div className="lobby-actions">{room.me?.isHost?<button className="primary" disabled={busy||room.players.length<2} onClick={()=>act('start')}>Oyunu Başlat →</button>:<p>Kurucu oyunu başlatınca hazırsın.</p>}<button className="text-button" disabled={busy} onClick={leave}>Odadan ayrıl</button></div></section>;
 }
 
 function TeamBox({ team, players, me, onSwitch }:{ team:Team; players:Player[]; me:Room['me']; onSwitch:()=>void }) {
