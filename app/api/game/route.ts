@@ -1,13 +1,41 @@
 import { env } from 'cloudflare:workers';
-import { cards, pickCard } from '../../../lib/cards';
+import { cardAt, pickCard, type CardKind, type CardMode } from '../../../lib/cardCatalog';
 
 export const runtime = 'edge';
 
 type Team = 'A' | 'B';
-type Settings = { playerLimit:number; duration:number; passLimit:number; targetScore:number; category:string };
-type GameState = { activeTeam:Team; currentPlayerId:string; endsAt:number; passesLeft:number; cardIndex:number; used:number[]; teamCursor:Record<Team, number> };
+type Settings = { playerLimit:number; duration:number; passLimit:number; targetScore:number; category:string; gameMode:CardMode; bonusWords:boolean; bonusCount:1|2 };
+type GameState = { activeTeam:Team; currentPlayerId:string; endsAt:number; passesLeft:number; cardIndex:number; cardKind:CardKind; used:string[]; teamCursor:Record<Team, number>; bonusDealt:Record<Team,number> };
 type RoomRow = { id:string; code:string; host_token:string; status:string; settings:string; scores:string; game_state:string | null; created_at:number; updated_at:number };
 type PlayerRow = { id:string; room_id:string; name:string; team:Team; seat:number; token:string; joined_at:number };
+
+function normalizeSettings(raw:Partial<Settings>):Settings {
+  return {
+    playerLimit:raw.playerLimit ?? 4,
+    duration:raw.duration ?? 60,
+    passLimit:raw.passLimit ?? 2,
+    targetScore:raw.targetScore ?? 20,
+    category:raw.category ?? 'Genel',
+    gameMode:raw.gameMode === 'sacmala' ? 'sacmala' : 'classic',
+    bonusWords:raw.bonusWords === true,
+    bonusCount:raw.bonusCount === 2 ? 2 : 1,
+  };
+}
+
+function normalizeGame(raw:Partial<GameState>):GameState {
+  const legacyUsed = Array.isArray(raw.used) ? raw.used : [];
+  return {
+    activeTeam:raw.activeTeam === 'B' ? 'B' : 'A',
+    currentPlayerId:raw.currentPlayerId ?? '',
+    endsAt:raw.endsAt ?? Date.now(),
+    passesLeft:raw.passesLeft ?? 0,
+    cardIndex:raw.cardIndex ?? 0,
+    cardKind:raw.cardKind ?? 'classic',
+    used:legacyUsed.filter((value):value is string => typeof value === 'string'),
+    teamCursor:raw.teamCursor ?? {A:0,B:0},
+    bonusDealt:raw.bonusDealt ?? {A:0,B:0},
+  };
+}
 
 const json = (data:unknown, status = 200) => Response.json(data, { status, headers:{ 'Cache-Control':'no-store' } });
 const fail = (message:string, status = 400) => json({ error:message }, status);
@@ -25,9 +53,9 @@ async function loadPlayers(roomId:string) {
 }
 
 function view(room:RoomRow, players:PlayerRow[], viewerToken:string) {
-  const settings = JSON.parse(room.settings) as Settings;
+  const settings = normalizeSettings(JSON.parse(room.settings) as Partial<Settings>);
   const scores = JSON.parse(room.scores) as Record<Team, number>;
-  const game = room.game_state ? JSON.parse(room.game_state) as GameState : null;
+  const game = room.game_state ? normalizeGame(JSON.parse(room.game_state) as Partial<GameState>) : null;
   const viewer = players.find((player) => player.token === viewerToken);
   const current = game ? players.find((player) => player.id === game.currentPlayerId) : null;
   const canSeeCard = !!(game && viewer && (viewer.id === game.currentPlayerId || viewer.team !== game.activeTeam));
@@ -38,7 +66,7 @@ function view(room:RoomRow, players:PlayerRow[], viewerToken:string) {
     game:game ? {
       activeTeam:game.activeTeam, currentPlayerId:game.currentPlayerId, currentPlayerName:current?.name ?? 'Oyuncu',
       endsAt:game.endsAt, passesLeft:game.passesLeft,
-      card:canSeeCard ? cards[game.cardIndex] : null,
+      card:canSeeCard ? cardAt(game.cardKind, game.cardIndex) : null,
       cardVisible:canSeeCard,
     } : null,
   };
@@ -49,10 +77,15 @@ async function saveGame(room:RoomRow, scores:Record<Team, number>, game:GameStat
     .bind(JSON.stringify(scores), JSON.stringify(game), status, Date.now(), room.id).run();
 }
 
-function nextCard(settings:Settings, game:GameState) {
-  const selected = pickCard(settings.category, game.used);
+function nextCard(settings:Settings, game:GameState, startOfTurn = false) {
+  const bonusTarget = settings.bonusCount;
+  const shouldDealBonus = settings.bonusWords && startOfTurn && game.bonusDealt[game.activeTeam] < bonusTarget;
+  const kind:CardKind = shouldDealBonus ? 'bonus' : settings.gameMode;
+  const selected = pickCard(kind, settings.category, game.used);
   game.cardIndex = selected.index;
-  game.used = [...game.used, selected.index].slice(-Math.max(12, Math.floor(cards.length * .7)));
+  game.cardKind = selected.kind;
+  game.used = [...game.used, selected.key];
+  if (shouldDealBonus) game.bonusDealt[game.activeTeam] += 1;
 }
 
 async function endTurn(room:RoomRow, players:PlayerRow[], settings:Settings, scores:Record<Team, number>, game:GameState) {
@@ -65,7 +98,7 @@ async function endTurn(room:RoomRow, players:PlayerRow[], settings:Settings, sco
   game.teamCursor[nextTeam] = cursor + 1;
   game.endsAt = Date.now() + settings.duration * 1000;
   game.passesLeft = settings.passLimit;
-  nextCard(settings, game);
+  nextCard(settings, game, true);
   await saveGame(room, scores, game);
 }
 
@@ -92,6 +125,9 @@ async function handlePost(request:Request) {
       passLimit:Math.min(5, Math.max(0, Number(body.passLimit) || 0)),
       targetScore:[10,15,20,30].includes(Number(body.targetScore)) ? Number(body.targetScore) : 20,
       category:String(body.category ?? 'Genel'),
+      gameMode:body.gameMode === 'sacmala' ? 'sacmala' : 'classic',
+      bonusWords:body.gameMode !== 'sacmala' && body.bonusWords === true,
+      bonusCount:Number(body.bonusCount) === 2 ? 2 : 1,
     };
     const now = Date.now(), newRoomId = id(), playerId = id(), playerToken = token(), code = roomCode();
     await env.DB.batch([
@@ -108,7 +144,7 @@ async function handlePost(request:Request) {
 
   if (action === 'join') {
     if (room.status !== 'lobby') return fail('Bu oyun başlamış.');
-    const settings = JSON.parse(room.settings) as Settings;
+    const settings = normalizeSettings(JSON.parse(room.settings) as Partial<Settings>);
     if (players.length >= settings.playerLimit) return fail('Oda dolu.');
     const name = String(body.name ?? '').trim().slice(0, 24);
     if (name.length < 2) return fail('İsim en az 2 karakter olmalı.');
@@ -138,14 +174,14 @@ async function handlePost(request:Request) {
     await env.DB.prepare('DELETE FROM players WHERE id = ?').bind(actor.id).run();
 
     if (room.status === 'playing' && room.game_state) {
-      const game = JSON.parse(room.game_state) as GameState;
+      const game = normalizeGame(JSON.parse(room.game_state) as Partial<GameState>);
       const hasTeamA = remaining.some((player) => player.team === 'A');
       const hasTeamB = remaining.some((player) => player.team === 'B');
       if (!hasTeamA || !hasTeamB) {
         await env.DB.prepare("UPDATE rooms SET host_token = ?, status = 'lobby', game_state = NULL, updated_at = ? WHERE id = ?")
           .bind(nextHostToken, Date.now(), room.id).run();
       } else if (game.currentPlayerId === actor.id) {
-        const settings = JSON.parse(room.settings) as Settings;
+        const settings = normalizeSettings(JSON.parse(room.settings) as Partial<Settings>);
         game.currentPlayerId = remaining.find((player) => player.team === game.activeTeam)!.id;
         game.endsAt = Date.now() + settings.duration * 1000;
         await env.DB.prepare('UPDATE rooms SET host_token = ?, game_state = ?, updated_at = ? WHERE id = ?')
@@ -168,20 +204,20 @@ async function handlePost(request:Request) {
     const a = players.filter((player) => player.team === 'A'), b = players.filter((player) => player.team === 'B');
     if (!a.length || !b.length) return fail('Her takımda en az bir oyuncu olmalı.');
     if (players.length < 2) return fail('En az iki oyuncu gerekli.');
-    const settings = JSON.parse(room.settings) as Settings;
-    const selected = pickCard(settings.category);
-    const game:GameState = { activeTeam:'A', currentPlayerId:a[0].id, endsAt:Date.now() + settings.duration * 1000, passesLeft:settings.passLimit, cardIndex:selected.index, used:[selected.index], teamCursor:{ A:1, B:0 } };
+    const settings = normalizeSettings(JSON.parse(room.settings) as Partial<Settings>);
+    const game:GameState = { activeTeam:'A', currentPlayerId:a[0].id, endsAt:Date.now() + settings.duration * 1000, passesLeft:settings.passLimit, cardIndex:0, cardKind:settings.gameMode, used:[], teamCursor:{ A:1, B:0 }, bonusDealt:{A:0,B:0} };
+    nextCard(settings, game, true);
     await saveGame(room, { A:0, B:0 }, game, 'playing');
   } else if (action === 'correct' || action === 'taboo' || action === 'pass' || action === 'end_turn') {
     if (room.status !== 'playing' || !room.game_state) return fail('Oyun aktif değil.');
-    const settings = JSON.parse(room.settings) as Settings;
+    const settings = normalizeSettings(JSON.parse(room.settings) as Partial<Settings>);
     const scores = JSON.parse(room.scores) as Record<Team, number>;
-    const game = JSON.parse(room.game_state) as GameState;
+    const game = normalizeGame(JSON.parse(room.game_state) as Partial<GameState>);
     const isNarrator = actor.id === game.currentPlayerId;
     const isOpponent = actor.team !== game.activeTeam;
     if (action === 'correct') {
       if (!isNarrator) return fail('Doğru cevabı yalnızca anlatıcı işaretleyebilir.', 403);
-      scores[game.activeTeam] += 1;
+      scores[game.activeTeam] += cardAt(game.cardKind, game.cardIndex).multiplier;
       nextCard(settings, game);
     } else if (action === 'taboo') {
       if (!isOpponent) return fail('Tabu kararını rakip takım verir.', 403);

@@ -97,4 +97,16 @@ label > span,.mini-label { color:#9990a7; }.primary { background:linear-gradient
 @keyframes actionPop { 0% { opacity:0; transform:translate(-50%,-50%) scale(.35) rotate(-12deg); } 45% { opacity:1; transform:translate(-50%,-50%) scale(1.15) rotate(4deg); } 100% { opacity:0; transform:translate(-50%,-62%) scale(1) rotate(-4deg); } }
 .result-panel h2 { color:var(--lime); }.confetti { color:#17101d; box-shadow:4px 4px 0 var(--hot); }.final-score .team-a { color:white; background:#302557; }.final-score .team-b { color:white; background:#34450f; }.result-teams > div { background:#ffffff09; }.result-teams p { color:#aaa2b6; }.loading { color:#aaa2b6; }.loading div { border-color:#312d40; border-top-color:var(--lime); }
 .toast { background:#ff3d72; border:1px solid white; box-shadow:5px 5px 0 #5c38bd; }
+.settings-form label > small { display:block; margin-top:7px; color:#aaa2b7; font-size:11px; }
+.settings-form select:disabled { opacity:.5; cursor:not-allowed; }
+.bonus-option { display:flex; align-items:center; gap:14px; padding:15px 17px; border:2px dashed #9b72ff; border-radius:16px; background:linear-gradient(110deg,#9b72ff16,#ff4fa31c); cursor:pointer; transition:.18s ease; }
+.bonus-option.enabled { border-style:solid; border-color:var(--lime); box-shadow:0 0 25px #dfff4520; transform:translateY(-1px); }
+.bonus-option input { width:22px; height:22px; flex:0 0 auto; accent-color:var(--hot); }
+.bonus-option select { width:auto; min-width:145px; margin-left:auto; padding:9px 11px; }
+.bonus-option > span { margin:0; text-transform:none; letter-spacing:0; color:white; }
+.bonus-option b,.bonus-option small { display:block; }.bonus-option b { color:var(--lime); font-size:15px; }.bonus-option small { margin-top:4px; color:#bdb4ca; font-size:11px; }
+.bonus-chip { color:#17101d!important; background:linear-gradient(135deg,var(--lime),#fff37b)!important; border-color:white!important; box-shadow:0 0 18px #dfff4540; }
+.word-card.bonus-card { background:linear-gradient(145deg,#fffbd4,#eaff9d); box-shadow:9px 9px 0 #ffb000,0 0 70px #dfff4550; animation:bonusGlow 1.5s ease-in-out infinite alternate; }
+.word-card.bonus-card .category { color:#6a3900; background:#ffd34e; border:1px solid #ad6a00; }
+@keyframes bonusGlow { to { box-shadow:9px 9px 0 #ff7a00,0 0 85px #dfff4580; } }
 @media (max-width:650px) { .hero::after { right:4px; top:20px; font-size:10px; }.app-shell::before { display:none; } h1 { font-size:49px; }.word-card { box-shadow:5px 5px 0 var(--hot); } }

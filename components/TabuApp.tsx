@@ -6,10 +6,10 @@ type Team = 'A' | 'B';
 type Player = { id:string; name:string; team:Team; seat:number };
 type Room = {
   code:string; status:'lobby'|'playing'|'finished';
-  settings:{ playerLimit:number; duration:number; passLimit:number; targetScore:number; category:string };
+  settings:{ playerLimit:number; duration:number; passLimit:number; targetScore:number; category:string; gameMode:'classic'|'sacmala'; bonusWords:boolean; bonusCount:1|2 };
   scores:Record<Team, number>; players:Player[];
   me:{ id:string; name:string; team:Team; isHost:boolean } | null;
-  game:null | { activeTeam:Team; currentPlayerId:string; currentPlayerName:string; endsAt:number; passesLeft:number; card:null | { word:string; forbidden:string[]; category:string }; cardVisible:boolean };
+  game:null | { activeTeam:Team; currentPlayerId:string; currentPlayerName:string; endsAt:number; passesLeft:number; card:null | { word:string; forbidden:string[]; category:string; kind:'classic'|'sacmala'|'bonus'; multiplier:1|3 }; cardVisible:boolean };
 };
 
 const categories = ['Genel','Günlük Hayat','Yemek','Spor','Teknoloji','Genel Kültür','Sanat'];
@@ -17,11 +17,11 @@ const API_ORIGIN = typeof window !== 'undefined' && ['tabu.alperensenel.com', 's
   ? 'https://tabu-alperensenel.saltatrix.chatgpt.site'
   : '';
 
-async function api(payload:Record<string, unknown>) {
+async function api<T>(payload:Record<string, unknown>):Promise<T> {
   const response = await fetch(`${API_ORIGIN}/api/game`, { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(payload) });
-  const data = await response.json();
+  const data = await response.json() as T & {error?:string};
   if (!response.ok) throw new Error(data.error || 'Bir şeyler ters gitti.');
-  return data;
+  return data as T;
 }
 
 export default function Home() {
@@ -39,7 +39,7 @@ export default function Home() {
     const version = mutationVersion.current;
     const response = await fetch(`${API_ORIGIN}/api/game?code=${encodeURIComponent(code)}&token=${encodeURIComponent(auth)}`, { cache:'no-store' });
     if (!response.ok) return;
-    const freshRoom = await response.json();
+    const freshRoom = await response.json() as Room;
     if (version === mutationVersion.current && !busyRef.current) setRoom(freshRoom);
   }, [roomCode, token]);
 
@@ -73,7 +73,7 @@ export default function Home() {
         scores: {
           ...room.scores,
           [room.game.activeTeam]: room.scores[room.game.activeTeam]
-            + (action === 'correct' ? 1 : action === 'taboo' ? -1 : 0),
+            + (action === 'correct' ? (room.game.card?.multiplier ?? 1) : action === 'taboo' ? -1 : 0),
         },
         game: {
           ...room.game,
@@ -81,7 +81,7 @@ export default function Home() {
         },
       });
     }
-    try { const data = await api({ action, code:roomCode, token, ...extra }); if (data.status) setRoom(data); return true; }
+    try { const data = await api<Room>({ action, code:roomCode, token, ...extra }); if (data.status) setRoom(data); return true; }
     catch (caught) { setRoom(snapshot); setError(caught instanceof Error ? caught.message : 'Bir şeyler ters gitti.'); return false; }
     finally { busyRef.current = false; setBusy(false); }
   };
@@ -128,8 +128,8 @@ function HomeScreen({ roomCode, setRoomCode, onCreate, onJoin }:{ roomCode:strin
 }
 
 function Create({ onBack, onDone, setError, setBusy, busy }:{ onBack:()=>void; onDone:(s:{code:string;token:string})=>void; setError:(s:string)=>void; setBusy:(v:boolean)=>void; busy:boolean }) {
-  const [form, setForm] = useState({ name:'', playerLimit:4, duration:60, passLimit:2, targetScore:20, category:'Genel' });
-  const submit = async (e:FormEvent) => { e.preventDefault(); setBusy(true); setError(''); try { onDone(await api({ action:'create', ...form })); } catch (x) { setError(x instanceof Error ? x.message : 'Oda kurulamadı.'); } finally { setBusy(false); } };
+  const [form, setForm] = useState({ name:'', playerLimit:4, duration:60, passLimit:2, targetScore:20, category:'Genel', gameMode:'classic' as 'classic'|'sacmala', bonusWords:false, bonusCount:1 as 1|2 });
+  const submit = async (e:FormEvent) => { e.preventDefault(); setBusy(true); setError(''); try { onDone(await api<{code:string;token:string}>({ action:'create', ...form })); } catch (x) { setError(x instanceof Error ? x.message : 'Oda kurulamadı.'); } finally { setBusy(false); } };
   return <section className="panel setup-panel"><button className="back" onClick={onBack}>← Geri</button><div className="panel-heading"><span className="step">01</span><div><h2>Oyununu kur</h2><p>Kuralları seç, oda kodunu arkadaşlarınla paylaş.</p></div></div>
     <form onSubmit={submit} className="settings-form">
       <label className="wide"><span>Adın</span><input required minLength={2} maxLength={24} placeholder="Örn. Alperen" value={form.name} onChange={(e)=>setForm({...form,name:e.target.value})} /></label>
@@ -137,7 +137,9 @@ function Create({ onBack, onDone, setError, setBusy, busy }:{ onBack:()=>void; o
       <label><span>Tur süresi</span><select value={form.duration} onChange={(e)=>setForm({...form,duration:+e.target.value})}>{[30,45,60,90].map(n=><option key={n} value={n}>{n} saniye</option>)}</select></label>
       <label><span>Pas hakkı</span><select value={form.passLimit} onChange={(e)=>setForm({...form,passLimit:+e.target.value})}>{[0,1,2,3,4,5].map(n=><option key={n}>{n}</option>)}</select></label>
       <label><span>Hedef skor</span><select value={form.targetScore} onChange={(e)=>setForm({...form,targetScore:+e.target.value})}>{[10,15,20,30].map(n=><option key={n} value={n}>{n} puan</option>)}</select></label>
-      <label className="wide"><span>Konu</span><select value={form.category} onChange={(e)=>setForm({...form,category:e.target.value})}>{categories.map(c=><option key={c}>{c}</option>)}</select></label>
+      <label className="wide"><span>Oyun modu</span><select value={form.gameMode} onChange={(e)=>setForm({...form,gameMode:e.target.value as 'classic'|'sacmala',bonusWords:e.target.value==='classic'&&form.bonusWords})}><option value="classic">Klasik Tabu</option><option value="sacmala">🤪 Saçmala — absürt ve komik</option></select></label>
+      <label className="wide"><span>Konu</span><select disabled={form.gameMode==='sacmala'} value={form.category} onChange={(e)=>setForm({...form,category:e.target.value})}>{categories.map(c=><option key={c}>{c}</option>)}</select>{form.gameMode==='sacmala'&&<small>Saçmala modu kendi 10.000 kartlık absürt havuzunu kullanır.</small>}</label>
+      {form.gameMode==='classic'&&<label className={`wide bonus-option ${form.bonusWords?'enabled':''}`}><input type="checkbox" checked={form.bonusWords} onChange={(e)=>setForm({...form,bonusWords:e.target.checked})}/><span><b>✨ Bonus Kelimeler</b><small>Her iki takıma da eşit sayıda gerçek zor kart gelir. Doğru cevap ×3 puan!</small></span><select aria-label="Takım başına bonus kelime" disabled={!form.bonusWords} value={form.bonusCount} onChange={(e)=>setForm({...form,bonusCount:Number(e.target.value) as 1|2})}><option value={1}>Takım başına 1</option><option value={2}>Takım başına 2</option></select></label>}
       <button className="primary wide" disabled={busy}>{busy ? 'Oda kuruluyor…' : 'Odayı Oluştur →'}</button>
     </form>
   </section>;
@@ -145,13 +147,13 @@ function Create({ onBack, onDone, setError, setBusy, busy }:{ onBack:()=>void; o
 
 function Join({ initialCode, onBack, onDone, setError, setBusy, busy }:{ initialCode:string; onBack:()=>void; onDone:(s:{code:string;token:string})=>void; setError:(s:string)=>void; setBusy:(v:boolean)=>void; busy:boolean }) {
   const [code,setCode]=useState(initialCode), [name,setName]=useState('');
-  const submit=async(e:FormEvent)=>{e.preventDefault();setBusy(true);setError('');try{onDone(await api({action:'join',code,name}));}catch(x){setError(x instanceof Error?x.message:'Odaya girilemedi.');}finally{setBusy(false);}};
+  const submit=async(e:FormEvent)=>{e.preventDefault();setBusy(true);setError('');try{onDone(await api<{code:string;token:string}>({action:'join',code,name}));}catch(x){setError(x instanceof Error?x.message:'Odaya girilemedi.');}finally{setBusy(false);}};
   return <section className="panel compact-panel"><button className="back" onClick={onBack}>← Geri</button><div className="panel-heading"><span className="step lime">02</span><div><h2>Odaya katıl</h2><p>Kodunu ve oyunda görünecek adını yaz.</p></div></div><form onSubmit={submit} className="join-form"><label><span>Oda kodu</span><input className="code-input" required minLength={5} maxLength={6} value={code} onChange={e=>setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,6))} /></label><label><span>Adın</span><input required minLength={2} maxLength={24} placeholder="Örn. Ece" value={name} onChange={e=>setName(e.target.value)} /></label><button className="primary" disabled={busy}>{busy?'Katılınıyor…':'Oyuna Katıl →'}</button></form></section>;
 }
 
 function Lobby({ room, busy, act, leave }:{ room:Room; busy:boolean; act:(a:string,e?:Record<string,unknown>)=>void; leave:()=>void|Promise<void> }) {
   const copy=()=>navigator.clipboard.writeText(`${location.origin}?room=${room.code}`);
-  return <section className="panel lobby-panel"><div className="lobby-head"><div><span className="mini-label">ODA KODU</span><button className="big-code" onClick={copy}>{room.code} <small>Kopyala</small></button></div><div className="lobby-meta"><span>{room.players.length}/{room.settings.playerLimit} oyuncu</span><span>{room.settings.duration} sn</span><span>{room.settings.passLimit} pas</span><span>{room.settings.category}</span></div></div><div className="waiting"><i/><span>Oyuncular bekleniyor</span></div><div className="teams"><TeamBox team="A" players={room.players} me={room.me} onSwitch={()=>act('team',{team:'A'})}/><div className="versus">VS</div><TeamBox team="B" players={room.players} me={room.me} onSwitch={()=>act('team',{team:'B'})}/></div><div className="lobby-actions">{room.me?.isHost?<button className="primary" disabled={busy||room.players.length<2} onClick={()=>act('start')}>Oyunu Başlat →</button>:<p>Kurucu oyunu başlatınca hazırsın.</p>}<button className="text-button" disabled={busy} onClick={leave}>Odadan ayrıl</button></div></section>;
+  return <section className="panel lobby-panel"><div className="lobby-head"><div><span className="mini-label">ODA KODU</span><button className="big-code" onClick={copy}>{room.code} <small>Kopyala</small></button></div><div className="lobby-meta"><span>{room.players.length}/{room.settings.playerLimit} oyuncu</span><span>{room.settings.duration} sn</span><span>{room.settings.passLimit} pas</span><span>{room.settings.gameMode==='sacmala'?'🤪 Saçmala':room.settings.category}</span>{room.settings.bonusWords&&<span className="bonus-chip">✨ {room.settings.bonusCount} Bonus ×3 / takım</span>}</div></div><div className="waiting"><i/><span>Oyuncular bekleniyor</span></div><div className="teams"><TeamBox team="A" players={room.players} me={room.me} onSwitch={()=>act('team',{team:'A'})}/><div className="versus">VS</div><TeamBox team="B" players={room.players} me={room.me} onSwitch={()=>act('team',{team:'B'})}/></div><div className="lobby-actions">{room.me?.isHost?<button className="primary" disabled={busy||room.players.length<2} onClick={()=>act('start')}>Oyunu Başlat →</button>:<p>Kurucu oyunu başlatınca hazırsın.</p>}<button className="text-button" disabled={busy} onClick={leave}>Odadan ayrıl</button></div></section>;
 }
 
 function TeamBox({ team, players, me, onSwitch }:{ team:Team; players:Player[]; me:Room['me']; onSwitch:()=>void }) {
@@ -166,8 +168,8 @@ function Game({ room, busy, act }:{ room:Room; busy:boolean; act:(a:string,e?:Re
   const narrator=room.me?.id===game.currentPlayerId, opponent=room.me?.team!==game.activeTeam;
   const trigger=(action:string,label:string)=>{setFlash(label);window.setTimeout(()=>setFlash(''),520);act(action);};
   return <section className="game-stage">{flash&&<div className="action-flash">{flash}</div>}<header className="scorebar"><div className="score team-a"><span>TAKIM A</span><b>{room.scores.A}</b></div><div className={`timer ${seconds<=10?'danger':''}`}><small>KALAN SÜRE</small><b>{seconds}</b></div><div className="score team-b"><b>{room.scores.B}</b><span>TAKIM B</span></div></header><div className="turn-info"><span className={`team-dot team-${game.activeTeam.toLowerCase()}`}/><strong>{game.currentPlayerName}</strong> mikrofonu kaptı 🎤 <small>Hedef: {room.settings.targetScore}</small></div>
-    {game.card?<div className="word-card"><span className="category">{game.card.category}</span><h2>{game.card.word}</h2><div className="forbidden-title">SÖYLEME!</div><ul>{game.card.forbidden.map(word=><li key={word}>{word}</li>)}</ul></div>:<div className="hidden-card"><div className="lock">✦</div><h2>Kelime gizli</h2><p>{game.currentPlayerName} anlatıyor. Takımınla birlikte kelimeyi bul!</p></div>}
-    <div className="game-controls">{narrator&&<><button className="pass" disabled={busy||game.passesLeft<1} onClick={()=>trigger('pass','🏃 PAS!')}>Pas <small>{game.passesLeft}</small></button><button className="correct" disabled={busy} onClick={()=>trigger('correct','🎉 ŞAK DİYE!')}>✓ Doğru</button><button className="end" disabled={busy} onClick={()=>trigger('end_turn','⏰ TUR BİTTİ!')}>Turu Bitir</button></>}{opponent&&<button className="taboo" disabled={busy} onClick={()=>trigger('taboo','🚨 YAKALANDIN!')}>✕ TABU!</button>}{!narrator&&!opponent&&<span className="guess-note">Bağırmak serbest, yasaklı kelimeyi söylemek değil! 📣</span>}</div>
+    {game.card?<div className={`word-card ${game.card.multiplier===3?'bonus-card':''}`}><span className="category">{game.card.multiplier===3?'✨ BONUS ×3':game.card.category}</span><h2>{game.card.word}</h2><div className="forbidden-title">SÖYLEME!</div><ul>{game.card.forbidden.map(word=><li key={word}>{word}</li>)}</ul></div>:<div className="hidden-card"><div className="lock">✦</div><h2>Kelime gizli</h2><p>{game.currentPlayerName} anlatıyor. Takımınla birlikte kelimeyi bul!</p></div>}
+    <div className="game-controls">{narrator&&<><button className="pass" disabled={busy||game.passesLeft<1} onClick={()=>trigger('pass','🏃 PAS!')}>Pas <small>{game.passesLeft}</small></button><button className="correct" disabled={busy} onClick={()=>trigger('correct',game.card?.multiplier===3?'✨ 3 PUAN!':'🎉 ŞAK DİYE!')}>✓ Doğru{game.card?.multiplier===3?' +3':''}</button><button className="end" disabled={busy} onClick={()=>trigger('end_turn','⏰ TUR BİTTİ!')}>Turu Bitir</button></>}{opponent&&<button className="taboo" disabled={busy} onClick={()=>trigger('taboo','🚨 YAKALANDIN!')}>✕ TABU!</button>}{!narrator&&!opponent&&<span className="guess-note">Bağırmak serbest, yasaklı kelimeyi söylemek değil! 📣</span>}</div>
   </section>;
 }
 
